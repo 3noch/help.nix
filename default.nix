@@ -1,8 +1,11 @@
 { lib, ... }:
 let
-  inherit (lib) any attrValues concatStringsSep filterAttrs isAttrs isDerivation mapAttrs mapAttrsToList;
+  inherit (lib) any attrValues concatStringsSep filterAttrs mapAttrs mapAttrsToList;
 in rec {
   internal = rec {
+    isAttrs = x: let result = builtins.tryEval (lib.isAttrs x); in result.success && result.value;
+    isDerivation = x: let result = builtins.tryEval (lib.isDerivation x); in result.success && result.value;
+
     mapAttrsNestedRecursiveCond = pred: f: set:
       let
         recurse = path: set:
