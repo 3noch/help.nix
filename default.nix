@@ -1,6 +1,6 @@
 { lib, ... }:
 let
-  inherit (lib) any attrValues concatStringsSep filterAttrs mapAttrs mapAttrsToList;
+  inherit (lib) concatStrings concatStringsSep filterAttrs mapAttrs mapAttrsToList;
 in rec {
   internal = rec {
     isAttrs = x: let result = builtins.tryEval (lib.isAttrs x); in result.success && result.value;
@@ -20,25 +20,47 @@ in rec {
 
     annotate = msg: x: { __orig = x; __help = msg; };
     hasHelp = x: isAttrs x && x ? __orig && x ? __help;
-    showHelpLines = path: msg: x:
-      if isAttrs x && !(isDerivation x) then ["" "${concatStringsSep "." path}: ${msg}"]
-      else ["${concatStringsSep "." path} - ${msg}"];
     eraseHelp = mapAttrsNestedRecursiveCond (_: true) (_name: value: if hasHelp value then value.__orig else value);
-    buildHelp =
+    buildHelpEntries = { basePath ? [], annotatedAttrsOnly ? true, neverKeep ? isDerivation, ... }:
       let
         recurse = path: as:
           let
             next = if hasHelp as then as.__orig else as;
-            nextAttrs = if isAttrs next then filterAttrs (_name: hasHelp) next else {};
-          in
-            concatStringsSep "\n" (
-              (if hasHelp as then showHelpLines path as.__help as.__orig else []) ++
-              (builtins.filter (x: x != "")
-                (mapAttrsToList (name: value: recurse (path ++ [name]) value) nextAttrs)
-              )
-            );
-      in recurse [];
-    };
+            nextAttrs = if !(isAttrs next) then {} else filterAttrs (_name: hasHelp) next; # We will recurse into these.
+            unannotatedAttrs = if annotatedAttrsOnly || !(isAttrs next) || neverKeep next # We will list these if requested.
+              then {}
+              else filterAttrs (_name: value: !(hasHelp value)) next;
+            entry =
+              if hasHelp as then [{ inherit path; help = as.__help; value = as.__orig; }]
+              else [];
+          in entry
+            ++
+            builtins.concatLists (
+              mapAttrsToList (name: value: recurse (path ++ [name]) value) nextAttrs
+            )
+            ++
+            mapAttrsToList (name: value: { path = path ++ [name]; help = null; inherit value; }) unannotatedAttrs
+            ;
+      in recurse basePath;
+    defaultRenderEntry = { path, help, value }:
+      let
+        dottedPath = concatStringsSep "." path;
+      in if isAttrs value && !(isDerivation value) then ["${dottedPath}: (attrset) ${if help == null then "" else help}"]
+        else ["${dottedPath}${if help == null then "" else " - ${help}"}"];
+    defaultComparison = x: y:
+      let
+        asStr = { path, help, ... }: "${if help == null then "1" else "0"}${concatStrings path}";
+      in asStr x < asStr y;
+    buildHelp =
+      { prepareEntries ? builtins.sort defaultComparison
+      , renderEntry ? defaultRenderEntry
+      , ...
+      }@config: as: concatStringsSep "\n" (
+        builtins.concatMap renderEntry (
+          prepareEntries (buildHelpEntries config as)
+        )
+    );
+  };
 
   # Adds help documentation to an attrset used for nix-build/nix-shell (often in default.nix).
   #
@@ -82,16 +104,16 @@ in rec {
   #  recursive attrsets will not strip off the annotations.
   withHelp' =
     { helpAttribute ? "help"
-    , wrapper ? (docs: "Help:\n\nThe following targets are documented:\n\n" + docs)
+    , wrapper ? (docs: "Help:\n\nThe following targets are available:\n\n" + docs)
     , throw ? builtins.throw
     , allAttribute ? "all"
     , ...
-    }: mkAttrs:
+    }@config: mkAttrs:
     let
       attrs = mkAttrs internal.annotate self;
       self = internal.eraseHelp attrs;
     in self // {
-      ${helpAttribute} = throw (wrapper (internal.buildHelp attrs));
+      ${helpAttribute} = throw (wrapper (internal.buildHelp config attrs));
       ${allAttribute} = self;
     };
 
