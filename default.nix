@@ -1,6 +1,6 @@
 { lib, ... }:
 let
-  inherit (lib) concatStrings concatStringsSep filterAttrs mapAttrs mapAttrsToList;
+  inherit (lib) concatStrings concatStringsSep filterAttrs mapAttrs mapAttrsToList nameValuePair;
 in rec {
   internal = rec {
     isAttrs = x: let result = builtins.tryEval (lib.isAttrs x); in result.success && result.value;
@@ -18,14 +18,15 @@ in rec {
           in mapAttrs g set;
       in recurse [] set;
 
-    annotate = msg: x: { __orig = x; __help = msg; };
+    annotate = msg: x: { __orig = x; __help = msg; __shallow = false; };
+    shallowAnnotate = msg: x: annotate msg x // { __shallow = true; };
     hasHelp = x: isAttrs x && x ? __orig && x ? __help;
     eraseHelp = mapAttrsNestedRecursiveCond (_: true) (_name: value: if hasHelp value then value.__orig else value);
     buildHelpEntries = { basePath ? [], annotatedAttrsOnly ? true, neverKeep ? isDerivation, ... }:
       let
         recurse = path: as:
           let
-            next = if hasHelp as then as.__orig else as;
+            next = if !(hasHelp as) then as else if as.__shallow then {} else as.__orig;
             nextAttrs = if !(isAttrs next) then {} else filterAttrs (_name: hasHelp) next; # We will recurse into these.
             unannotatedAttrs = if annotatedAttrsOnly || !(isAttrs next) || neverKeep next # We will list these if requested.
               then {}
@@ -54,10 +55,11 @@ in rec {
     buildHelp =
       { prepareEntries ? builtins.sort defaultComparison
       , renderEntry ? defaultRenderEntry
+      , additionalEntries ? []
       , ...
       }@config: as: concatStringsSep "\n" (
         builtins.concatMap renderEntry (
-          prepareEntries (buildHelpEntries config as)
+          prepareEntries (buildHelpEntries config as ++ additionalEntries)
         )
     );
   };
@@ -103,14 +105,15 @@ in rec {
   #  by `withHelp'`. You must use this instead of `rec { ... }` since built-in
   #  recursive attrsets will not strip off the annotations.
   withHelp' =
-    { helpAttribute ? "help"
+    { annotate ? internal.annotate
+    , helpAttribute ? "help"
     , wrapper ? (docs: "Help:\n\nThe following targets are available:\n\n" + docs)
     , throw ? builtins.throw
     , allAttribute ? "all"
     , ...
     }@config: mkAttrs:
     let
-      attrs = mkAttrs internal.annotate self;
+      attrs = mkAttrs annotate self;
       self = internal.eraseHelp attrs;
     in self // {
       ${helpAttribute} = throw (wrapper (internal.buildHelp config attrs));
@@ -122,4 +125,14 @@ in rec {
   #   `all` is the name of the attribute for building all attributes.
   #   A default header message is provided.
   withHelp = withHelp' {};
+
+  # Wraps each attribute in an attrset with help annotations when the keys match.
+  #
+  # For example:
+  #     wrapHelp help { a = 1; b = 2;} { a = "A One"; b = "A Two"; }
+  #
+  #   is equivalent to
+  #
+  #     { a = help "A One" 1; b = help "A Two" 2; }
+  wrapHelp = help: orig: annots: mapAttrs (name: value: if annots ? ${name} then help annots.${name} value else value) orig;
 }
