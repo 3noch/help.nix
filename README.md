@@ -1,6 +1,23 @@
 # help.nix
 
-## `withHelpConfig`
+A small Nix library for adding something akin to `--help` to your `default.nix` files using `nix-build -A help`.
+
+The easiest way to get started is with `withHelp`:
+
+```nix
+{ pkgs ? import <nixpkgs> {} }:
+let
+  helpLib = pkgs.callPackage ./. {};
+in helpLib.withHelp (self: help: {
+  hello = help "This builds the hello package" pkgs.hello;
+})
+```
+
+With this you can run `nix-build -A hello` to build `hello` or `nix-build -A help` to see all the help messages.
+
+## Usage
+
+### `withHelpConfig`
 
 Adds help documentation to an attrset used for nix-build/nix-shell (often in default.nix).
 
@@ -46,7 +63,7 @@ Here `help` is a function that annotates an attribute with a string. If you anno
 `self` is a reference to the unannotated attrset that will be returned by `withHelpConfig`. You must use this instead of `rec { ... }`
 since built-in recursive attrsets will not strip off the annotations.
 
-## `withHelp`
+### `withHelp`
 
 Like `withHelpConfig` but using the default configuration:
   * `help` is the name of the attribute for throwing the help message.
